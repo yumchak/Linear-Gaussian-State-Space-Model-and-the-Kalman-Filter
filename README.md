@@ -85,7 +85,7 @@ coefficient such as a hedge ratio.
 | Aseem Kulkarni | **Pairs trading** — model the ratio between two related stocks as an LGSSM, backtest against simple benchmarks, possibly many pairs at once. |
 | Victor Sze | **Interacting particle systems** — $N$ agents coupled through their mean, $x^{(i)}_t = A x^{(i)}_{t-1} + B \bar{x}_{t-1} + q^{(i)}_t$; a change of coordinates decouples the $Nd$-dimensional filter into independent $d$-dimensional ones, linear rather than cubic in $N$. |
 | Nigel Prem Lim | **Footballers' market values** — true value as a hidden state, estimated from noisy irregular signals (on-pitch performance, published valuations, transfer fees). |
-| Lozko Pilev | **Parameter estimation** — drop the known-$(F, Q, H, R)$ assumption and study the EM algorithm; filtering under misspecification and its link to filter stability. |
+| Lozko Pilev | **Time-Varying Market Beta** — investigate how a company's exposure to the wider stock market changes over time; EM algorithm; filtering under misspecification and its link to filter stability. |
 
 ## References
 
