@@ -74,9 +74,9 @@ symmetric-by-construction Joseph form, and a QR-based square-root filter that ke
 covariance positive definite to machine precision.
 
 **In the package now:** `kalman.py` (model, validation, simulation, filter, smoother,
-forecasting), `em.py` (parameter estimation) and `batch.py`, a deliberately slow $O((Td)^3)$
-dense posterior that exists only as a test oracle. **Still to come:** the diagnostics below and
-the worked examples.
+forecasting), `em.py` (parameter estimation), `diagnostics.py` (accuracy and calibration) and
+`batch.py`, a deliberately slow $O((Td)^3)$ dense posterior that exists only as a test oracle.
+**Still to come:** the worked examples.
 
 ### Parameter estimation
 
@@ -100,9 +100,29 @@ so the states are effectively known.
 Tests double as numerical evidence for the theory:
 
 1. **Exactness** — agreement with the batch posterior to machine precision, at every $t$, for the filter and the smoother alike. *Done.*
-2. **Accuracy** — RMSE of filter and smoother against the true simulated state. *Smoother-beats-filter checked; the reported figures are still to come.*
-3. **Calibration** — 95% credible interval coverage and NEES.
+2. **Accuracy** — RMSE of filter and smoother against the true simulated state, via `rmse`. *Done.*
+3. **Calibration** — credible interval coverage and NEES, via `coverage`, `joint_coverage`, `nees` and `nis`. *Done.*
 4. **Scalability and robustness** — run time as $d$ and $k$ grow, missing observations, time-varying models. *Missing data and time-varying models done; timings still to come.*
+
+### Diagnostics
+
+Accuracy and calibration are separate questions: a filter can track the state well and still be
+wrong about how sure it is. `rmse` answers the first. For the second, the normalised estimation
+error squared
+
+$$\epsilon_t = (x_t - m_t)^\top P_t^{-1} (x_t - m_t) \sim \chi^2_d$$
+
+should average $d$ under a correct model, so a filter reporting much more than $d$ is
+overconfident. `consistency_interval` gives the acceptance interval for the test, and
+`monte_carlo_nees` runs the independent replications that make it exact — including the
+misspecification experiment, where you simulate under one model and filter under another.
+
+On real data there is no true state and NEES cannot be computed. `nis` is the substitute:
+innovations are observable, and under a correct model they are white, so the same test applies
+within a single run.
+
+The chi-squared quantiles are computed from the regularised incomplete gamma function rather
+than read from a table, and are tested against published values.
 
 Running examples: a two-dimensional drifting object, vehicle tracking, and a drifting regression
 coefficient such as a hedge ratio.

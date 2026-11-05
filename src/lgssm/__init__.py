@@ -13,6 +13,17 @@ distributions p(x_t | y_{1:T}).
 """
 
 from .batch import BatchResult, batch_posterior
+from .diagnostics import (
+    chi2_cdf,
+    chi2_quantile,
+    consistency_interval,
+    coverage,
+    joint_coverage,
+    monte_carlo_nees,
+    nees,
+    nis,
+    rmse,
+)
 from .em import EMResult, fit_em
 from .kalman import (
     LGSSM,
@@ -36,6 +47,15 @@ __all__ = [
     "batch_posterior",
     "EMResult",
     "fit_em",
+    "rmse",
+    "nees",
+    "nis",
+    "coverage",
+    "joint_coverage",
+    "consistency_interval",
+    "monte_carlo_nees",
+    "chi2_cdf",
+    "chi2_quantile",
 ]
 
 __version__ = "0.1.0"
