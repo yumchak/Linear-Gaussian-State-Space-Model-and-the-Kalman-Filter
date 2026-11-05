@@ -46,15 +46,20 @@ python3 -m venv .venv
 
 ```python
 import numpy as np
-from lgssm import LGSSM, simulate, kalman_filter
+from lgssm import LGSSM, simulate, kalman_filter, rts_smoother
 
 model = LGSSM(F=F, Q=Q, H=H, R=R, m0=m0, P0=P0)
 states, obs = simulate(model, 100, rng=np.random.default_rng(0))
-result = kalman_filter(model, obs)
 
-result.means      # filtering distributions p(x_t | y_1:t)
+result = kalman_filter(model, obs)
+result.means          # filtering distributions p(x_t | y_1:t)
 result.covs
-result.loglik     # log p(y_1:T), the hook for parameter estimation
+result.loglik         # log p(y_1:T), the hook for parameter estimation
+
+smoothed = rts_smoother(model, result)
+smoothed.means        # smoothing distributions p(x_t | y_1:T)
+smoothed.covs
+smoothed.cross_covs   # lag-one correlations, for the EM M-step
 ```
 
 `LGSSM` takes any of $F, Q, H, R$ as either a single matrix or a stack with a leading time axis,
@@ -64,14 +69,20 @@ is dropped from the update, so a fully missing measurement leaves a pure predict
 symmetric-by-construction Joseph form, and a QR-based square-root filter that keeps the
 covariance positive definite to machine precision.
 
-**In the package now:** `kalman.py` (model, validation, simulation, filter, forecasting) and
-`batch.py`, a deliberately slow $O((Td)^3)$ dense posterior that exists only as a test oracle.
-**Still to come:** the RTS smoother, the diagnostics below, and the worked examples.
+**In the package now:** `kalman.py` (model, validation, simulation, filter, smoother,
+forecasting) and `batch.py`, a deliberately slow $O((Td)^3)$ dense posterior that exists only as
+a test oracle. **Still to come:** parameter estimation, the diagnostics below, and the worked
+examples.
+
+`rts_smoother` returns the three quantities the EM algorithm needs from its E-step: the smoothed
+means $m_{t|T}$, the smoothed covariances $P_{t|T}$, and the lag-one correlations
+$P_{t,t+1|T}$ (`cross_covs`), together with the smoothed initial state for the $m_0, P_0$
+updates.
 
 Tests double as numerical evidence for the theory:
 
-1. **Exactness** — agreement with the batch posterior to machine precision, at every $t$. *Done.*
-2. **Accuracy** — RMSE of filter and smoother against the true simulated state.
+1. **Exactness** — agreement with the batch posterior to machine precision, at every $t$, for the filter and the smoother alike. *Done.*
+2. **Accuracy** — RMSE of filter and smoother against the true simulated state. *Smoother-beats-filter checked; the reported figures are still to come.*
 3. **Calibration** — 95% credible interval coverage and NEES.
 4. **Scalability and robustness** — run time as $d$ and $k$ grow, missing observations, time-varying models. *Missing data and time-varying models done.*
 

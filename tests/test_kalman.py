@@ -16,43 +16,6 @@ FORMS = ["standard", "joseph", "sqrt"]
 
 
 # ---------------------------------------------------------------------------
-# fixtures
-# ---------------------------------------------------------------------------
-
-
-def random_model(rng, d=2, k=2, scale=0.5):
-    """A random, reasonably well-conditioned LGSSM."""
-    F = np.eye(d) + scale * rng.standard_normal((d, d)) / d
-    H = rng.standard_normal((k, d))
-    Q = _random_cov(rng, d, scale=0.3)
-    R = _random_cov(rng, k, scale=0.5)
-    P0 = _random_cov(rng, d, scale=1.0)
-    m0 = rng.standard_normal(d)
-    return LGSSM(F=F, Q=Q, H=H, R=R, m0=m0, P0=P0)
-
-
-def _random_cov(rng, n, scale=1.0):
-    A = rng.standard_normal((n, n))
-    return scale * (A @ A.T + n * np.eye(n))
-
-
-@pytest.fixture
-def rng():
-    return np.random.default_rng(20261021)
-
-
-@pytest.fixture
-def model(rng):
-    return random_model(rng)
-
-
-@pytest.fixture
-def data(rng, model):
-    _, obs = simulate(model, 8, rng)
-    return obs
-
-
-# ---------------------------------------------------------------------------
 # exactness
 # ---------------------------------------------------------------------------
 
@@ -202,18 +165,10 @@ def test_drift_matches_batch(rng, model, data, form):
 
 
 @pytest.mark.parametrize("form", FORMS)
-def test_singular_prior_covariance(form):
+def test_singular_prior_covariance(tracking_model, form):
     """A known initial state gives P0 = 0, which must not break anything."""
-    model = LGSSM(
-        F=np.array([[1.0, 1.0], [0.0, 1.0]]),
-        Q=np.diag([1e-4, 0.1]),
-        H=np.array([[1.0, 0.0]]),
-        R=[[0.5]],
-        m0=[0.0, 1.0],
-        P0=np.zeros((2, 2)),
-    )
-    rng = np.random.default_rng(7)
-    _, obs = simulate(model, 10, rng)
+    model = tracking_model
+    _, obs = simulate(model, 10, np.random.default_rng(7))
     result = kalman_filter(model, obs, form=form)
 
     batch = batch_posterior(model, obs)
@@ -254,9 +209,9 @@ def test_update_does_not_increase_uncertainty(model, data, form):
         assert np.linalg.eigvalsh(diff).min() > -1e-10
 
 
-def test_filter_beats_the_prior_on_average(rng):
+def test_filter_beats_the_prior_on_average(rng, make_model):
     """A sanity check on the whole pipeline, not a property of one run."""
-    model = random_model(rng)
+    model = make_model(rng)
     states, obs = simulate(model, 200, rng)
     result = kalman_filter(model, obs)
 

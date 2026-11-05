@@ -1,4 +1,4 @@
-"""The Kalman filter for linear-Gaussian state space models.
+"""The Kalman filter and RTS smoother for linear-Gaussian state space models.
 
 The model is
 
@@ -23,7 +23,15 @@ from typing import List, Optional, Tuple
 
 import numpy as np
 
-__all__ = ["LGSSM", "FilterResult", "simulate", "kalman_filter", "forecast"]
+__all__ = [
+    "LGSSM",
+    "FilterResult",
+    "SmootherResult",
+    "simulate",
+    "kalman_filter",
+    "rts_smoother",
+    "forecast",
+]
 
 
 # ---------------------------------------------------------------------------
@@ -443,6 +451,121 @@ def _filter_sqrt(model: LGSSM, y: np.ndarray) -> FilterResult:
     )
 
 
+# ---------------------------------------------------------------------------
+# smoothing
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class SmootherResult:
+    """Output of the Rauch-Tung-Striebel smoother.
+
+    ``means`` and ``covs`` are indexed like the filter's: entry ``i`` refers
+    to time t = i + 1.  The prior is reached by the last backward step and is
+    reported separately, in ``initial_mean`` and ``initial_cov``.
+
+    Attributes
+    ----------
+    means, covs : (T, d) and (T, d, d) arrays
+        The smoothing distributions p(x_t | y_{1:T}).
+    initial_mean, initial_cov : (d,) and (d, d) arrays
+        p(x_0 | y_{1:T}), the prior revised by all of the data.  The EM
+        updates for m0 and P0 need this.
+    cross_covs : (T, d, d) array
+        The lag-one posterior cross-covariances, with ``cross_covs[i]`` =
+        Cov(x_i, x_{i+1} | y_{1:T}).  Note that entry 0 involves x_0, so the
+        T entries are exactly the T pairs (x_{t-1}, x_t) that the EM updates
+        for F and Q sum over.
+    gains : (T, d, d) array
+        The smoother gains, ``gains[i]`` = G_i for the pair (x_i, x_{i+1}).
+    """
+
+    means: np.ndarray
+    covs: np.ndarray
+    initial_mean: np.ndarray
+    initial_cov: np.ndarray
+    cross_covs: np.ndarray
+    gains: np.ndarray
+
+
+def rts_smoother(model: LGSSM, result: FilterResult) -> SmootherResult:
+    """Smooth a completed forward pass (Rauch, Tung and Striebel, 1965).
+
+    Where the filter gives p(x_t | y_{1:t}), the smoother gives
+    p(x_t | y_{1:T}): the same state, but using the measurements that came
+    after it as well.  It is a backward recursion over the filter's output,
+
+        G_t   = P_t F_{t+1}' (P'_{t+1})^{-1},
+        m^s_t = m_t + G_t (m^s_{t+1} - m'_{t+1}),
+        P^s_t = P_t + G_t (P^s_{t+1} - P'_{t+1}) G_t',
+
+    started from m^s_T = m_T and P^s_T = P_T, so no measurement is touched a
+    second time; everything needed is already in ``result``.  The recursion
+    is run one step further than the data, onto the prior, which costs
+    nothing and gives the smoothed initial state.
+
+    Parameters
+    ----------
+    model : LGSSM
+        The same model the forward pass was run with.
+    result : FilterResult
+        Output of :func:`kalman_filter`.  Any of the three forms will do:
+        the smoother only reads the moments, which agree across forms.
+
+    Returns
+    -------
+    SmootherResult
+
+    Notes
+    -----
+    Missing measurements need no special handling here.  They were dealt
+    with on the way forward, and the backward pass sees only their effect on
+    the filtering and prediction moments.
+    """
+    n, d = result.means.shape[0], model.dim_x
+    if result.means.shape[1] != d:
+        raise ValueError(
+            f"filter result is {result.means.shape[1]}-dimensional, model is {d}-dimensional"
+        )
+    _check_n_steps(model, n)
+
+    # Prepend the prior, so that the backward pass is one uniform recursion
+    # over times T, T-1, ..., 0 rather than a loop plus a final special case.
+    filt_means = np.vstack([model.m0[None, :], result.means])
+    filt_covs = np.concatenate([model.P0[None, :, :], result.covs])
+
+    sm_means = np.empty((n + 1, d))
+    sm_covs = np.empty((n + 1, d, d))
+    sm_means[n], sm_covs[n] = filt_means[n], filt_covs[n]
+    gains = np.empty((n, d, d))
+    cross_covs = np.empty((n, d, d))
+
+    for i in range(n - 1, -1, -1):
+        F = model.F_at(i)
+        m_pred_next = result.pred_means[i]
+        P_pred_next = result.pred_covs[i]
+
+        # G_i = P_i F' (P'_{i+1})^{-1}, solved rather than inverted.  Both
+        # matrices are symmetric, hence the transpose.
+        gain = _solve_psd(P_pred_next, F @ filt_covs[i]).T
+
+        sm_means[i] = filt_means[i] + gain @ (sm_means[i + 1] - m_pred_next)
+        sm_covs[i] = _symmetrise(
+            filt_covs[i] + gain @ (sm_covs[i + 1] - P_pred_next) @ gain.T
+        )
+        gains[i] = gain
+        cross_covs[i] = gain @ sm_covs[i + 1]
+
+    return SmootherResult(
+        means=sm_means[1:],
+        covs=sm_covs[1:],
+        initial_mean=sm_means[0],
+        initial_cov=sm_covs[0],
+        cross_covs=cross_covs,
+        gains=gains,
+    )
+
+
 def forecast(
     model: LGSSM, mean: np.ndarray, cov: np.ndarray, horizon: int, start: int = 0
 ) -> Tuple[np.ndarray, np.ndarray]:
@@ -531,6 +654,22 @@ def _psd_sqrt(A: np.ndarray) -> np.ndarray:
         eigvals, eigvecs = np.linalg.eigh(A)
         eigvals = np.clip(eigvals, 0.0, None)
         return eigvecs * np.sqrt(eigvals)
+
+
+def _solve_psd(A: np.ndarray, B: np.ndarray) -> np.ndarray:
+    """Solve A X = B for symmetric PSD A, tolerating a singular A.
+
+    The smoother gain divides by a predicted covariance, which is singular
+    when the dynamics are deterministic in some direction (Q singular, and
+    a prior that is certain about that direction).  The gain is then not
+    unique, and the least-squares solution picks the minimum-norm one, which
+    is the right choice: the ambiguity is in a direction the data says
+    nothing about.
+    """
+    try:
+        return np.linalg.solve(A, B)
+    except np.linalg.LinAlgError:
+        return np.linalg.lstsq(A, B, rcond=None)[0]
 
 
 def _rq_lower(A: np.ndarray) -> np.ndarray:

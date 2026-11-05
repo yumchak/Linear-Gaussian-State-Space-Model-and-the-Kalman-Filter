@@ -29,9 +29,12 @@ class BatchResult:
     means, covs : (T, d) and (T, d, d) arrays
         Marginal posteriors of each x_t.  With all T measurements these are
         the smoothing distributions; run on a prefix y_{1:t}, the last entry
-        is the filtering distribution at time t.
+        is the filtering distribution at time t.  With ``include_initial``
+        there are T + 1 entries and index 0 is x_0.
     joint_mean, joint_cov : (T*d,) and (T*d, T*d) arrays
-        The full joint posterior, states stacked in time order.
+        The full joint posterior, states stacked in time order.  Its
+        off-diagonal blocks are the posterior cross-covariances, which is
+        what the smoother's lag-one cross-covariances are checked against.
     loglik : float
         log p(y_{1:T}), as a plain multivariate normal density.
     """
@@ -43,18 +46,28 @@ class BatchResult:
     loglik: float
 
 
-def batch_posterior(model: LGSSM, y) -> BatchResult:
+def batch_posterior(model: LGSSM, y, include_initial: bool = False) -> BatchResult:
     """Posterior of x_{1:T} given ``y``, by dense Gaussian conditioning.
 
     Missing components (``nan``) are dropped from the measurement vector,
     exactly as the filter drops them from its update.
+
+    Parameters
+    ----------
+    model : LGSSM
+    y : (T, k) or (T,) array
+    include_initial : bool
+        Also return x_0, as index 0 of every array.  The smoothed initial
+        state and the lag-one cross-covariances involve x_0, so testing
+        them needs it; the filter's own tests do not.
     """
     y = np.asarray(y, dtype=float)
     if y.ndim == 1:
         y = y[:, None]
     n, d = y.shape[0], model.dim_x
+    offset = 1 if include_initial else 0
 
-    prior_mean, prior_cov = _state_prior(model, n)
+    prior_mean, prior_cov = _state_prior(model, n, include_initial)
 
     # Stack the observed measurement components into one long vector:
     # y_obs = G x + noise, with G block diagonal over time.
@@ -63,8 +76,9 @@ def batch_posterior(model: LGSSM, y) -> BatchResult:
         idx = np.flatnonzero(~np.isnan(y[i]))
         if idx.size == 0:
             continue
-        G_i = np.zeros((idx.size, n * d))
-        G_i[:, i * d : (i + 1) * d] = model.H_at(i)[idx]
+        G_i = np.zeros((idx.size, (n + offset) * d))
+        block = i + offset
+        G_i[:, block * d : (block + 1) * d] = model.H_at(i)[idx]
         rows.append(G_i)
         obs_vals.append(y[i, idx])
         noise_blocks.append(model.R_at(i)[np.ix_(idx, idx)])
@@ -87,36 +101,45 @@ def batch_posterior(model: LGSSM, y) -> BatchResult:
         joint_cov = 0.5 * (joint_cov + joint_cov.T)
         loglik = _gaussian_logpdf(resid, cov_yy)
 
-    means = joint_mean.reshape(n, d)
-    covs = np.stack([joint_cov[i * d : (i + 1) * d, i * d : (i + 1) * d] for i in range(n)])
+    n_blocks = n + offset
+    means = joint_mean.reshape(n_blocks, d)
+    covs = np.stack(
+        [joint_cov[i * d : (i + 1) * d, i * d : (i + 1) * d] for i in range(n_blocks)]
+    )
     return BatchResult(
         means=means, covs=covs, joint_mean=joint_mean, joint_cov=joint_cov, loglik=loglik
     )
 
 
-def _state_prior(model: LGSSM, n: int) -> Tuple[np.ndarray, np.ndarray]:
-    """Mean and covariance of (x_1, ..., x_n) before seeing any measurement."""
-    d = model.dim_x
-    mean = np.empty((n, d))
-    cov = np.zeros((n * d, n * d))
+def _state_prior(
+    model: LGSSM, n: int, include_initial: bool = False
+) -> Tuple[np.ndarray, np.ndarray]:
+    """Mean and covariance of the states before seeing any measurement.
 
-    m, P = model.m0, model.P0
-    blocks = []  # blocks[i] is Cov(x_{i+1}, x_{i+1})
-    for i in range(n):
-        F = model.F_at(i)
-        m = F @ m + model.u_at(i)
-        P = F @ P @ F.T + model.Q_at(i)
-        P = 0.5 * (P + P.T)
-        mean[i] = m
-        blocks.append(P)
-        cov[i * d : (i + 1) * d, i * d : (i + 1) * d] = P
+    Built over x_0, ..., x_n and then trimmed, so that the recursion for the
+    cross-covariance blocks does not need a separate first case.
+    """
+    d = model.dim_x
+    size = n + 1
+    mean = np.empty((size, d))
+    cov = np.zeros((size * d, size * d))
+
+    mean[0] = model.m0
+    cov[:d, :d] = model.P0
+    for i in range(1, size):
+        F = model.F_at(i - 1)
+        mean[i] = F @ mean[i - 1] + model.u_at(i - 1)
+        prev = cov[(i - 1) * d : i * d, (i - 1) * d : i * d]
+        block = F @ prev @ F.T + model.Q_at(i - 1)
+        cov[i * d : (i + 1) * d, i * d : (i + 1) * d] = 0.5 * (block + block.T)
         # Cov(x_j, x_i) = Cov(x_j, x_{i-1}) F' for j < i.
         for j in range(i):
-            prev = cov[j * d : (j + 1) * d, (i - 1) * d : i * d]
-            block = prev @ F.T
-            cov[j * d : (j + 1) * d, i * d : (i + 1) * d] = block
-            cov[i * d : (i + 1) * d, j * d : (j + 1) * d] = block.T
+            cross = cov[j * d : (j + 1) * d, (i - 1) * d : i * d] @ F.T
+            cov[j * d : (j + 1) * d, i * d : (i + 1) * d] = cross
+            cov[i * d : (i + 1) * d, j * d : (j + 1) * d] = cross.T
 
+    if not include_initial:
+        mean, cov = mean[1:], cov[d:, d:]
     return mean.reshape(-1), 0.5 * (cov + cov.T)
 
 

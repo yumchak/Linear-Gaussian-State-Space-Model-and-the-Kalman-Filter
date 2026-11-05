@@ -7,17 +7,29 @@
     result = kalman_filter(model, obs)
 
 ``result.means`` and ``result.covs`` are the filtering distributions, and
-``result.loglik`` the log-likelihood of the data under the model.
+``result.loglik`` the log-likelihood of the data under the model.  Passing
+that result to ``rts_smoother(model, result)`` gives the smoothing
+distributions p(x_t | y_{1:T}).
 """
 
 from .batch import BatchResult, batch_posterior
-from .kalman import LGSSM, FilterResult, forecast, kalman_filter, simulate
+from .kalman import (
+    LGSSM,
+    FilterResult,
+    SmootherResult,
+    forecast,
+    kalman_filter,
+    rts_smoother,
+    simulate,
+)
 
 __all__ = [
     "LGSSM",
     "FilterResult",
+    "SmootherResult",
     "simulate",
     "kalman_filter",
+    "rts_smoother",
     "forecast",
     "BatchResult",
     "batch_posterior",
