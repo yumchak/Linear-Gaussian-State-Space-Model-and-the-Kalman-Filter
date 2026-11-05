@@ -46,7 +46,7 @@ python3 -m venv .venv
 
 ```python
 import numpy as np
-from lgssm import LGSSM, simulate, kalman_filter, rts_smoother
+from lgssm import LGSSM, simulate, kalman_filter, rts_smoother, fit_em
 
 model = LGSSM(F=F, Q=Q, H=H, R=R, m0=m0, P0=P0)
 states, obs = simulate(model, 100, rng=np.random.default_rng(0))
@@ -60,6 +60,10 @@ smoothed = rts_smoother(model, result)
 smoothed.means        # smoothing distributions p(x_t | y_1:T)
 smoothed.covs
 smoothed.cross_covs   # lag-one correlations, for the EM M-step
+
+fit = fit_em(model, obs, estimate=("Q", "R"))
+fit.model             # parameters fitted by maximum likelihood
+fit.loglik            # one entry per iteration, guaranteed non-decreasing
 ```
 
 `LGSSM` takes any of $F, Q, H, R$ as either a single matrix or a stack with a leading time axis,
@@ -70,21 +74,35 @@ symmetric-by-construction Joseph form, and a QR-based square-root filter that ke
 covariance positive definite to machine precision.
 
 **In the package now:** `kalman.py` (model, validation, simulation, filter, smoother,
-forecasting) and `batch.py`, a deliberately slow $O((Td)^3)$ dense posterior that exists only as
-a test oracle. **Still to come:** parameter estimation, the diagnostics below, and the worked
-examples.
+forecasting), `em.py` (parameter estimation) and `batch.py`, a deliberately slow $O((Td)^3)$
+dense posterior that exists only as a test oracle. **Still to come:** the diagnostics below and
+the worked examples.
 
-`rts_smoother` returns the three quantities the EM algorithm needs from its E-step: the smoothed
-means $m_{t|T}$, the smoothed covariances $P_{t|T}$, and the lag-one correlations
-$P_{t,t+1|T}$ (`cross_covs`), together with the smoothed initial state for the $m_0, P_0$
-updates.
+### Parameter estimation
+
+Dropping the assumption that $F, Q, H, R$ are known, `fit_em` maximises the likelihood by
+alternating maximisation of the free energy
+$F(\theta, q) = \int q(x) \log \frac{p_\theta(x, y)}{q(x)}\,dx$: the E-step sets $q$ to the
+posterior — a Kalman filter followed by an RTS smoother — and the M-step maximises the expected
+complete-data log-likelihood in closed form. Because the complete-data log-likelihood contains
+the cross term $x_t x_{t-1}^\top$, the M-step needs the smoother's lag-one correlations
+$P_{t,t+1|T}$ as well as $m_{t|T}$ and $P_{t|T}$.
+
+`estimate` says which parameters to fit, defaulting to the noise covariances $(Q, R)$. A
+time-varying parameter cannot be estimated from one sequence, but may be *known*, as $H_t$ is in
+a drifting regression — so those models fit fine. $F$ and $H$ are only jointly identified up to
+a similarity transform; the docstring says so, and you should fix one of them.
+
+EM guarantees the likelihood never decreases, which the tests assert on every fit rather than
+taking on trust. The M-step updates are checked against ordinary least squares on models rigged
+so the states are effectively known.
 
 Tests double as numerical evidence for the theory:
 
 1. **Exactness** — agreement with the batch posterior to machine precision, at every $t$, for the filter and the smoother alike. *Done.*
 2. **Accuracy** — RMSE of filter and smoother against the true simulated state. *Smoother-beats-filter checked; the reported figures are still to come.*
 3. **Calibration** — 95% credible interval coverage and NEES.
-4. **Scalability and robustness** — run time as $d$ and $k$ grow, missing observations, time-varying models. *Missing data and time-varying models done.*
+4. **Scalability and robustness** — run time as $d$ and $k$ grow, missing observations, time-varying models. *Missing data and time-varying models done; timings still to come.*
 
 Running examples: a two-dimensional drifting object, vehicle tracking, and a drifting regression
 coefficient such as a hedge ratio.

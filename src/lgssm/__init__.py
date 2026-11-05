@@ -13,6 +13,7 @@ distributions p(x_t | y_{1:T}).
 """
 
 from .batch import BatchResult, batch_posterior
+from .em import EMResult, fit_em
 from .kalman import (
     LGSSM,
     FilterResult,
@@ -33,6 +34,8 @@ __all__ = [
     "forecast",
     "BatchResult",
     "batch_posterior",
+    "EMResult",
+    "fit_em",
 ]
 
 __version__ = "0.1.0"
