@@ -3,6 +3,9 @@
 Final-year group project, University of Bristol.
 Victor Sze, Aseem Kulkarni, Nigel Prem Lim, Lozko Pilev — supervised by Dr Sam Power.
 
+Started 1 October 2026, at the first supervision meeting; this repository was created on
+14 October 2026.
+
 A hidden state observed only through noisy measurements can never be known exactly, so Bayesian
 filtering tracks a distribution for it instead, updated as each measurement arrives. The
 linear-Gaussian case is the one setting where this can be solved exactly — by the Kalman filter —
